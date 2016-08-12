@@ -28,8 +28,9 @@ STAP=$PREFIX"/bin/stap"
 TAPSETS=$PREFIX"/share/systemtap/tapset/"
 STAP_RUNTIME=$PREFIX"/share/systemtap/runtime/"
 
-ARCHITECTURES=("x86" "arm")
-COMPILER_PREFIX_LIST_ARM=("arm-eabi-" "arm-none-linux-gnueabi-" "arm-none-eabi-" "arm-unknown-linux-gnueabi-")
+ARCHITECTURES=("x86" "arm" "arm64")
+COMPILER_PREFIX_LIST_ARM64=("aarch64-linux-gnu-")
+COMPILER_PREFIX_LIST_ARM=("/home/xhyang/src/gladiator/android/prebuilts/gcc/linux-x86/arm/mstar-arm-tools/arm-2014.05/bin/arm-none-linux-gnueabi-")
 COMPILER_PREFIX_LIST_X86=("" "i686-linux-android-")
 
 export SYSTEMTAP_TAPSET=${TAPSETS}
