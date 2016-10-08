@@ -51,6 +51,7 @@ then
 	fi
 fi
 
+cp build_android.sh ${SRC_DIR}/
 cd ${SRC_DIR}
 if [ -e "Makefile" ];
 then

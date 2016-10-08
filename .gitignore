@@ -8,7 +8,6 @@ installed
 # ... as every module
 *.ko
 # ... and config
-*.conf
 # Object and protobuf files are waste..
 *.o
 *.pb.*

@@ -29,8 +29,8 @@ TAPSETS=$PREFIX"/share/systemtap/tapset/"
 STAP_RUNTIME=$PREFIX"/share/systemtap/runtime/"
 
 ARCHITECTURES=("x86" "arm" "arm64")
-COMPILER_PREFIX_LIST_ARM64=("aarch64-linux-gnu-")
-COMPILER_PREFIX_LIST_ARM=("/home/xhyang/src/gladiator/android/prebuilts/gcc/linux-x86/arm/mstar-arm-tools/arm-2014.05/bin/arm-none-linux-gnueabi-")
+COMPILER_PREFIX_LIST_ARM64=("/home/xhyang/src/pulpfiction/prebuilts/gcc/linux-x86/aarch64/linaro-aarch64_linux-2014.09/bin/aarch64-linux-gnu-")
+COMPILER_PREFIX_LIST_ARM=("arm-none-linux-gnueabi-")
 COMPILER_PREFIX_LIST_X86=("" "i686-linux-android-")
 
 export SYSTEMTAP_TAPSET=${TAPSETS}
@@ -131,7 +131,7 @@ checkCompiler
 SCRIPT=$1
 if [ ! -f ${SCRIPT_DIR}/${SCRIPT}".stp" ];
 then
-	echo "The specifid script (${SCRIPT}.stp) does not exist" >&2	
+	echo "The specifid script (${SCRIPT}.stp) does not exist" >&2
 	exit 1
 fi
 
@@ -154,7 +154,7 @@ else
 	CROSS_COMPILE="-B CROSS_COMPILE=${COMPILER_PREFIX}"
 fi
 
-STAP_CMD="${STAP} -p 4 -v ${3} -a ${KERNEL_ARCH} ${CROSS_COMPILE} -r ${KERNEL_SRC} -R ${STAP_RUNTIME} -t -g -m ${MODULE_NAME} ${SCRIPT_DIR}/${SCRIPT}.stp"
+STAP_CMD="${STAP} -p 4 -vvv ${3} -a ${KERNEL_ARCH} ${CROSS_COMPILE} -r ${KERNEL_SRC} -R ${STAP_RUNTIME} -t -k -g -m ${MODULE_NAME} ${SCRIPT_DIR}/${SCRIPT}.stp"
 echo "Executing: ${STAP_CMD}"
 ${STAP_CMD}
 
