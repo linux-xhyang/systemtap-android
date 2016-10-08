@@ -154,7 +154,7 @@ else
 	CROSS_COMPILE="-B CROSS_COMPILE=${COMPILER_PREFIX}"
 fi
 
-STAP_CMD="${STAP} -p 4 -vvv ${3} -a ${KERNEL_ARCH} ${CROSS_COMPILE} -r ${KERNEL_SRC} -R ${STAP_RUNTIME} -t -k -g -m ${MODULE_NAME} ${SCRIPT_DIR}/${SCRIPT}.stp"
+STAP_CMD="${STAP} -p 4 -v ${3} -a ${KERNEL_ARCH} ${CROSS_COMPILE} -r ${KERNEL_SRC} -R ${STAP_RUNTIME} -t -k -g -m ${MODULE_NAME} ${SCRIPT_DIR}/${SCRIPT}.stp"
 echo "Executing: ${STAP_CMD}"
 ${STAP_CMD}
 
