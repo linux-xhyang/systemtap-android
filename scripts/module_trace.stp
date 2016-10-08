@@ -1,0 +1,19 @@
+#! /usr/bin/env stap
+
+%{
+    #include <linux/module.h>
+%}
+
+function get_module_name:string (module:long)
+%{ /* pure */ /* unprivileged */
+    struct module *mod = (struct module*)(long)STAP_ARG_module;
+    strlcpy(STAP_RETVALUE, module_name(mod),MODULE_NAME_LEN);
+%}
+
+
+probe kernel.function("module_put")
+{
+    printf("Module:%s\n",get_module_name($module));
+    print_backtrace();
+    println("");
+}

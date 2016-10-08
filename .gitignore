@@ -4,7 +4,7 @@ elfutils-*
 !eltutils-*.tar.bz2
 installed
 # Ignore any systemtap script as well ...
-*.stp
+#*.stp
 # ... as every module
 *.ko
 # ... and config
