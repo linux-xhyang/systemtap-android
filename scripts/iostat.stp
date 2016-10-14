@@ -1,0 +1,121 @@
+#! /usr/bin/env stap
+%{
+    #include <linux/fs.h>		/* For VERIFY_READ/VERIFY_WRITE */
+    #include <linux/uaccess.h>		/* For VERIFY_READ/VERIFY_WRITE */
+    #include <linux/uio.h>			/* For ITER_IOVEC */
+
+%}
+
+global targetpid;
+global iotime;
+global filemap;
+/**
+ * sfunction MAJOR - Extract major device number from a kernel device number (kdev_t)
+ *
+ * @dev: Kernel device number to query.
+ */
+function S_ISDIR:long(mode:long)
+%{ /* pure */
+    STAP_RETVALUE = S_ISDIR(STAP_ARG_mode);
+%}
+
+function file_isdir:long(file:long) {
+    d_inode = __file_inode(file)
+    if(d_inode == 0)
+        return -1;
+
+    STAP_RETVALUE = S_ISDIR(@cast(d_inode, "inode", "kernel:nfs")->i_mode);
+}
+
+function print_time:string(ts:long)
+%{
+    unsigned long rem_nsec;
+    u64 ts = STAP_ARG_ts;
+    rem_nsec = do_div(ts, 1000000000);
+
+    #ifdef CONFIG_SMP
+            sprintf(STAP_RETVALUE, "[%5lu.%06lu@%d] ",
+                    (unsigned long)ts, rem_nsec / 1000, smp_processor_id());
+    #else
+            sprintf(STAP_RETVALUE, "[%5lu.%06lu] ",
+                    (unsigned long)ts, rem_nsec / 1000);
+    #endif
+%}
+
+function app_process:long(task:long)
+{
+    if(targetpid)
+        return 1;
+    i = 3;
+    while (task_pid(task) > 1) {
+        if(__file_filename(task_exe_file(task)) == "app_process32")
+            return 1;
+        task = task_parent(task);
+        if(i-- == 0)
+            break;
+    }
+    return 0;
+}
+
+probe begin {
+    targetpid = target();
+}
+
+@__private30 function __file_bdev:long (file:long)
+{
+    d_inode = __file_inode(file)
+    if (d_inode == 0)
+        return 0
+    return @cast(d_inode, "inode", "kernel")->i_sb->s_bdev
+}
+
+probe generic.fop.aio_read.return  {
+    if(!file_isdir(file)){
+        dev = __file_dev(file)
+        devname = __find_bdevname(dev, __file_bdev(file))
+        if(devname == "mmcblk0p11" || devname == "mmcblk0p17"){
+            iotime["iotime",pid(),tid(),devname,__file_filename(file),__file_ino(file),file] += (local_clock_us() - @entry(local_clock_us()));
+        }
+    }
+}
+
+probe kernel.function("filemap_fault").return{
+    file = $vma->vm_file;
+
+    if(!file_isdir(file)){
+        dev = __file_dev(file)
+        devname = __find_bdevname(dev, __file_bdev(file))
+        if(devname == "mmcblk0p11" || devname == "mmcblk0p17"){
+            filemap["filemap",pid(),$vmf,devname,__file_filename(file),__file_ino(file),file] += (local_clock_us() - @entry(local_clock_us()));
+        }
+    }
+}
+
+probe end{
+    //foreach([p,n,e] in iotime- limit 20)
+    //printf("%d %8d %16s %32s %8d\n",gettimeofday_us(),p,n,e,iotime[p,n,e])
+
+    printf("iotime %s #####\n",print_time(local_clock_ns()))
+    foreach([s,p,t,n,e,i,f] in iotime- limit 30)
+    printf("%7s %5d %16s %32s %8d %d\n",s,p,n,e,i,iotime[s,p,t,n,e,i,f])
+
+    printf("filemap %s #####\n",print_time(local_clock_ns()))
+    foreach([var0,var1,var2,var3,var4,var5,var6] in filemap- limit 30)
+    printf("%7s %5d %16s %32s %8d %d\n",var0,var1,var3,var4,var5,filemap[var0,var1,var2,var3,var4,var5,var6])
+    delete iotime;
+    delete filemap;
+}
+
+/*
+probe timer.s(5) {
+    printf("iotime %s #####\n",print_time(local_clock_ns()))
+    foreach([s,p,t,n,e,i,f] in iotime- limit 30)
+    printf("%7s %5d %16s %32s %8d %d\n",s,p,n,e,i,iotime[s,p,t,n,e,i,f])
+}
+
+probe timer.s(5) {
+    printf("filemap %s #####\n",print_time(local_clock_ns()))
+    foreach([var0,var1,var2,var3,var4,var5,var6] in filemap- limit 30)
+    printf("%7s %5d %16s %32s %8d %d\n",var0,var1,var3,var4,var5,filemap[var0,var1,var2,var3,var4,var5,var6])
+}
+*/

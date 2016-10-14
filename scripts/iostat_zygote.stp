@@ -1,0 +1,80 @@
+#! /usr/bin/env stap
+
+%{
+    #include <linux/fs.h>		/* For VERIFY_READ/VERIFY_WRITE */
+%}
+
+
+global targetpid;
+global file_read;
+
+probe begin {
+    targetpid = target();
+}
+
+function S_ISDIR:long(mode:long)
+%{ /* pure */
+    STAP_RETVALUE = S_ISDIR(STAP_ARG_mode);
+%}
+
+function print_time:string(ts:long)
+%{
+    unsigned long rem_nsec;
+    u64 ts = STAP_ARG_ts;
+    rem_nsec = do_div(ts, 1000000000);
+
+    #ifdef CONFIG_SMP
+            sprintf(STAP_RETVALUE, "[%5lu.%06lu@%d] ",
+                    (unsigned long)ts, rem_nsec / 1000, smp_processor_id());
+    #else
+            sprintf(STAP_RETVALUE, "[%5lu.%06lu] ",
+                           (unsigned long)ts, rem_nsec / 1000);
+    #endif
+%}
+
+function file_isdir:long(file:long) {
+    d_inode = __file_inode(file)
+    if(d_inode == 0)
+        return -1;
+
+    STAP_RETVALUE = S_ISDIR(@cast(d_inode, "inode", "kernel:nfs")->i_mode);
+}
+
+function app_process:long(task:long)
+{
+    if(targetpid)
+        return 1;
+    while (task_pid(task) > 1) {
+        if(__file_filename(task_exe_file(task)) == "app_process32")
+            return 1;
+        task = task_parent(task);
+    }
+    return 0;
+}
+
+probe vfs.read.return
+{
+    if((targetpid && (targetpid == pid())) || !targetpid){
+        if(!file_isdir(file)){
+            if(devname == "mmcblk0p11" || devname == "mmcblk0p17"){
+                c = task_current()
+                if(app_process(c))
+                {
+                    //printf("%s %d %s\n",task_execname(c),task_pid(c),__file_filename(task_exe_file(c)));
+                    //printf("%s %d\n",devname,ino);
+                    file_read[pid(),tid(),devname,ino,file] += (local_clock_us() - @entry(local_clock_us()));
+                }
+            }
+        }
+    }
+}
+
+probe timer.s(2) {
+    printf("%s #####\n",print_time(local_clock_ns()))
+    foreach([p,t,d,i,f] in file_read- limit 30)
+    printf("%5d %5d %16s %8d %d\n",p,t,d,i,file_read[p,t,d,i,f])
+}
+
+probe end{
+    delete file_read;
+}

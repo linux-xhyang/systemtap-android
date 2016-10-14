@@ -1,0 +1,224 @@
+/*
+ * topfile - display read/write I/O accumulated by file
+ *
+ * Copyright (C) 2007 Tom Zanussi <zanussi@comcast.net>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * Usage: run this script while running blktrace in another shell e.g.
+ *
+ * # stap -I tapsets topfile.stp
+ * # btrace /dev/hda
+ *
+ * Define watchme in script to track only files opened by that program
+ *
+ */
+
+//global watchme = "firefox-bin"
+
+global dirty_acct = 1 /* if set, account writes to dirtying process */
+
+probe begin
+{
+	if (watchme == null)
+		printf("watching read/write file I/O for all programs\n\n")
+	else
+		printf("watching read/write file I/O for program %s\n\n", watchme)
+}
+
+global dirty_page_inos[262144]
+
+global ino_filename
+global rw_ino
+
+global tracked_tids
+
+global qrk_by_ino
+global qwk_by_ino
+global iok_by_ino
+
+function kib(bytes)
+{
+	return bytes >> 10
+}
+
+probe end {
+	printf("%8s %-25s %-8s %-8s %-8s\n",
+		"INO  ","FILENAME",
+		"TOTAL(k)","QR(k)   ","QW(k)   ")
+
+	printf("%8s %-25s %-8s %-8s %-8s\n",
+		"--------","--------",
+		"--------","--------","--------")
+
+	foreach (ino in iok_by_ino-) {
+		if (!ino)
+			continue
+		filename = ino_filename[ino]
+		printf("%8d %-25s %-8d %-8d %-8d\n", ino, filename,
+			kib(iok_by_ino[ino]),
+			kib(qrk_by_ino[ino]), kib(qwk_by_ino[ino]))
+	}
+}
+
+probe generic.fop.open
+{
+	ino_filename[ino] = filename
+}
+
+probe kernel.function("vfs_read"), kernel.function("vfs_readv"),
+		kernel.function("vfs_write"), kernel.function("vfs_writev")
+{
+	rw_ino[tid()] = $file->f_mapping->host->i_ino
+}
+
+probe kernel.function("vfs_read").return, kernel.function("vfs_readv").return
+{
+	if ($return > 0)
+		delete rw_ino[tid()]
+}
+
+probe kernel.function("vfs_write").return, kernel.function("vfs_writev").return
+{
+	if ($return > 0)
+		delete rw_ino[tid()]
+}
+
+function account_bio_dirty_pages(bio)
+{
+	n_segments = __bio_segments(bio)
+	bi_idx = __bio_bi_idx(bio)
+	for (i = bi_idx; i < bi_idx + n_segments; i++) {
+		bv_len = __bio_bv_len(bio, i)
+		bv_page = __bio_bv_page(bio, i)
+		accountable_ino = dirty_page_inos[bv_page]
+		qwk_by_ino[accountable_ino] += bv_len
+		iok_by_ino[accountable_ino] += bv_len
+		delete dirty_page_inos[bv_page]
+	}
+}
+
+probe kernel.function("submit_bio")
+{
+	if (!dirty_acct)
+		next
+
+	if ($rw & __WRITE)
+		account_bio_dirty_pages($bio)
+}
+
+probe vfs.__set_page_dirty_buffers, vfs.__set_page_dirty_nobuffers
+{
+	if (!dirty_acct)
+		next
+
+	if (watchme != null && execname() != watchme)
+		next
+
+	dirty_page_inos[__page] = ino
+}
+
+/* overridden blktrace.stp handlers */
+
+global counts
+function blk_complete(maj, min, what, rw, ts, sector, bytes, err)
+{
+	printf("")
+}
+
+function blk_requeue(maj, min, what, rw, ts, sector, bytes, err)
+{
+	printf("")
+}
+
+function blk_issue(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_insert(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_queue(maj, min, what, rw, ts, sector, bytes)
+{
+	if (watchme != null && execname() != watchme)
+		return 0
+
+	if (!blk_direction_write(rw)) {
+		tid = tid()
+		ino = rw_ino[tid]
+		qrk_by_ino[ino] += bytes
+		iok_by_ino[ino] += bytes
+	} else {
+		if (!dirty_acct) {
+			tid = tid()
+			ino = rw_ino[tid]
+			qwk_by_ino[ino] += bytes
+			iok_by_ino[ino] += bytes
+		}
+	}
+}
+
+function blk_bounce(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_back_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_front_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_getrq(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_sleeprq(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_plug(maj, min, what, rw, ts)
+{
+	printf("")
+}
+
+function blk_unplug_io(maj, min, what, rw, ts, pdu_int)
+{
+	printf("")
+}
+
+function blk_unplug_timer(maj, min, what, rw, ts, pdu_int)
+{
+	printf("")
+}
+
+function blk_remap(maj, min, what, rw, ts, sector, bytes, rmaj, rmin, remap_sector)
+{
+	printf("")
+}
+
+function blk_split(maj, min, what, rw, ts, sector, pdu_int)
+{
+	printf("")
+}

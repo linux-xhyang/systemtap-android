@@ -1,0 +1,343 @@
+/*
+ * traceread - trace read I/O for all or selected file
+ *
+ * Copyright (C) 2007 Tom Zanussi <zanussi@comcast.net>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ *
+ * Usage: run this script while running blktrace in another shell e.g.
+ *
+ * # stap -I tapsets traceread.stp filename (use "all" to trace all reads)
+ * # btrace /dev/hda
+ *
+ * Define deltas_only in script to print only q2d/d2c/q2c records
+ *
+ */
+
+global trackfile
+global trackall
+global tracking_file
+global tracking_ino
+global reading_file
+global probe_info
+
+global start_ts
+global prev_ts
+
+global qsect_ts
+global qsect_tid
+global dsect
+
+global deltas_only = 0 /* only display q2d, d2c, q2c on completion */
+
+probe begin
+{
+	trackfile = @1
+	printf("tracking file %s\n", trackfile)
+	if (trackfile == "all")
+		trackall = 1
+}
+
+function ts_str(ts, tid)
+{
+	if (prev_ts[tid] == 0)
+		prev_ts[tid] = ts
+	delta = ts - prev_ts[tid]
+	s = sprintf("%5d.%09d %5d.%09d", ts_s(ts), ts_ns(ts),
+			ts_s(delta), ts_ns(delta))
+	prev_ts[tid] = ts
+	return s
+}
+
+probe generic.fop.open
+{
+	if (trackall) {
+		tracking_file[ino] = filename
+		next
+	}
+
+	if (filename == trackfile) {
+		tracking_ino = ino
+		tracking_file[ino] = filename
+		printf("tracking file %s, ino %d\n", filename, ino)
+	}
+}
+
+probe kernel.function("vfs_read")
+{
+	ino = $file->f_mapping->host->i_ino
+	if (tracking_file[ino] == null)
+		next
+
+	if (trackall || (tracking_ino && (tracking_ino == ino))) {
+		tid = tid()
+		reading_file[tid] = ino
+		start_ts[tid] = gettimeofday_ns() - __start_ts
+		prev_ts[tid] = 0
+		s = ts_str(start_ts[tid], tid)
+
+		if (deltas_only)
+			probe_info[tid] =
+			sprintf("%s %s(%d) file %s, pos %d count %d",
+			probefunc(), execname(), tid, tracking_file[ino],
+			ppos_pos($pos), $count)
+		else
+			printf("%s %s.entry %s(%d) file %s, pos %d count %d\n",
+			s, probefunc(), execname(), tid, tracking_file[ino],
+			ppos_pos($pos), $count)
+	}
+}
+
+probe kernel.function("vfs_read").return
+{
+	tid = tid()
+	ino = reading_file[tid]
+	if (ino) {
+		now = gettimeofday_ns() - __start_ts
+		s = ts_str(now, tid)
+		delete reading_file[tid]
+		delete start_ts[tid]
+		delete prev_ts[tid]
+		delete probe_info[tid]
+
+		if (deltas_only)
+			next
+
+		printf("%s %s.exit %s(%d) file %s retval %d\n", s,
+			probefunc(), execname(), tid,
+			tracking_file[ino], $return)
+	}
+}
+
+/* overridden blktrace.stp handlers */
+
+function blk_complete(maj, min, what, rw, ts, sector, bytes, err)
+{
+	q2c_str = q2d_str = d2q_str = "N/A"
+	qtime = qsect_ts[blk_direction_write(rw), sector]
+	if (!qtime)
+		return 0
+
+	tid = qsect_tid[blk_direction_write(rw), sector]
+	dtime = dsect[blk_direction_write(rw), sector]
+	q2c_str = sprintf("%3d.%09d", ts_s(ts - qtime), ts_ns(ts - qtime))
+	q2d_str = sprintf("%3d.%09d", ts_s(dtime - qtime), ts_ns(dtime - qtime))
+	d2c_str = sprintf("%3d.%09d", ts_s(ts - dtime), ts_ns(ts - dtime))
+
+	s = ts_str(ts, tid)
+
+	if (deltas_only)
+		printf("C %s %s sector %10d, bytes %7d, q2d %s, d2c %s, q2c %s\n",
+		probe_info[tid], blk_direction_write_str(rw), sector, bytes,
+		q2d_str, d2c_str, q2c_str)
+	else
+		printf("%s     C %s sector %10d, bytes %7d, q2d %s, d2c %s, q2c %s\n",
+		s, blk_direction_write_str(rw), sector, bytes,
+		q2d_str, d2c_str, q2c_str)
+
+	delete qsect_ts[blk_direction_write(rw), sector]
+	delete qsect_tid[blk_direction_write(rw), sector]
+	delete dsect[blk_direction_write(rw), sector]
+}
+
+function blk_requeue(maj, min, what, rw, ts, sector, bytes, err)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     R sector %d, bytes %d\n", s, sector, bytes)
+	}
+}
+
+function blk_issue(maj, min, what, rw, ts, sector, bytes)
+{
+	qtime = qsect_ts[blk_direction_write(rw), sector]
+	if (!qtime)
+		return 0
+
+	tid = qsect_tid[blk_direction_write(rw), sector]
+	dsect[blk_direction_write(rw), sector] = ts
+
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	s = ts_str(ts, tid)
+	printf("%s     D %s sector %d, bytes %d\n", s,
+		blk_direction_write_str(rw), sector, bytes)
+}
+
+function blk_insert(maj, min, what, rw, ts, sector, bytes)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     I %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_queue(maj, min, what, rw, ts, sector, bytes)
+{
+	tid = tid()
+	if (reading_file[tid]) {
+		if (!blk_direction_write(rw)) {
+			qsect_tid[blk_direction_write(rw), sector] = tid
+			qsect_ts[blk_direction_write(rw), sector] = ts
+		}
+
+		if (deltas_only)
+			return 0
+
+		s = ts_str(ts, tid)
+		printf("%s     Q %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_bounce(maj, min, what, rw, ts, sector, bytes)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     B %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_back_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	tid = tid()
+	if (reading_file[tid]) {
+		delete qsect_ts[blk_direction_write(rw), sector]
+		delete qsect_tid[blk_direction_write(rw), sector]
+
+		if (deltas_only)
+			return 0
+
+		s = ts_str(ts, tid)
+		printf("%s     M %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_front_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     F %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_getrq(maj, min, what, rw, ts, sector, bytes)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     G %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_sleeprq(maj, min, what, rw, ts, sector, bytes)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     S %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_plug(maj, min, what, rw, ts)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     P %s\n", s, blk_direction_write_str(rw))
+	}
+}
+
+function blk_unplug_io(maj, min, what, rw, ts, pdu_int)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     U %s\n", s, blk_direction_write_str(rw))
+	}
+}
+
+function blk_unplug_timer(maj, min, what, rw, ts, pdu_int)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	s = ts_str(ts, tid)
+	printf("%s     T %s\n", s, blk_direction_write_str(rw))
+}
+
+function blk_remap(maj, min, what, rw, ts, sector, bytes, rmaj, rmin, remap_sector)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     A %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}
+
+function blk_split(maj, min, what, rw, ts, sector, pdu_int)
+{
+	if (deltas_only)
+		return 0
+
+	tid = tid()
+	if (reading_file[tid]) {
+		s = ts_str(ts, tid)
+		printf("%s     X %s sector %d, bytes %d\n", s,
+			blk_direction_write_str(rw), sector, bytes)
+	}
+}

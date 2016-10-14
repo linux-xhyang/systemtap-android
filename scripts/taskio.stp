@@ -10,24 +10,24 @@
 # published by the Free Software Foundation.
 #
 
-global reads, writes, total_io
+global reads_task, writes_task, total_io_task
 global mon_pid
 probe vfs.read.return {
-    if(pid() == mon_pid){
+    if((pid() == mon_pid) || (0 == mon_pid)){
         if ($return > 0) {
             filename = __file_filename($file)
-            reads[devname,filename] += $return
-            total_io[devname,filename] += $return
+            reads_task[devname,filename] += $return
+            total_io_task[devname,filename] += $return
         }
     }
 }
 
 probe vfs.write.return {
-    if(pid() == mon_pid){
+    if((pid() == mon_pid) || (0 == mon_pid)){
         if ($return > 0) {
             filename = __file_filename($file)
-            writes[devname,filename] += $return
-            total_io[devname,filename] += $return
+            writes_task[devname,filename] += $return
+            total_io_task[devname,filename] += $return
         }
     }
 }
@@ -44,11 +44,11 @@ function humanreadable(bytes) {
   }
 }
 
-probe timer.s(3) {
-  foreach([p,e] in total_io- limit 10)
+probe timer.s(2) {
+    foreach([p,e] in total_io_task- limit 10)
     printf("%15s %15s r: %12s w: %12s\n",
-           p, e, humanreadable(reads[p,e]),
-           humanreadable(writes[p,e]))
+           p, e, humanreadable(reads_task[p,e]),
+           humanreadable(writes_task[p,e]))
   printf("\n")
   # Note we don't zero out reads, writes and total_io,
   # so the values are cumulative since the script started.

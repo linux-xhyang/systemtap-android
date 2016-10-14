@@ -1,0 +1,17 @@
+global input_devname="mmcblk0";
+global latency
+
+probe ioblock.request.return {
+    printf("%s\n",devname);
+    if (devname == input_devname && size > 0) {
+        latency[rw, size] <<< gettimeofday_ns() - @entry(gettimeofday_ns())
+    }
+}
+
+probe end {
+    foreach ([rw, size-] in latency) {
+        printf ("rw: %d, io_size: %d, count: %d, avg_latency: %d\n", rw, size, @count(latency[rw, size]), @avg(latency[rw, size]))
+    }
+}
+
+/*已经不可以统计latency，现在io flow已经改变为提交io srequet，然后等待read_pages返回*/

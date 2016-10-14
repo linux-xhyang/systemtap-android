@@ -1,0 +1,229 @@
+/*
+ * spectest - test 'speculative tracing'
+ *
+ * Copyright (C) 2007 Tom Zanussi <zanussi@comcast.net>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ *
+ *  For this test, if we find I/O that takes more than 1 second from queue to
+ *  completion, we dump the speculative buffer (which can be used to locate the
+ *  data in the real trace), and exit the script.
+ *
+ */
+
+global qsect_ts
+global dsect_ts
+
+probe begin
+{
+	use_blktrace()
+}
+
+/* overridden blktrace.stp handlers */
+
+function blk_complete(maj, min, what, rw, ts, sector, bytes, err)
+{
+	event = __print_act_with_err(maj, min, what, rw, ts, sector, bytes, err)
+	spectrace_trace(event)
+
+	qtime = qsect_ts[blk_direction_write(rw), sector]
+	dtime = dsect_ts[blk_direction_write(rw), sector]
+	if (qtime) {
+		q2c = ts - qtime
+		if (ts_s(q2c) >= 1) { /* exit and dump speculative trace buffer if q2c > 1 */
+			q2d = dtime - qtime
+			d2c = ts - dtime
+			printf("q2c time > 1 second detected, dumping and exiting...\n\n")
+			printf("q2c (%3d.%09d) = q2d (%3d.%09d) + d2c (%3d.%09d)\n\n",
+				ts_s(q2c), ts_ns(q2c), ts_s(q2d), ts_ns(q2d), ts_s(d2c), ts_ns(d2c))
+			printf("Last %d records of trace (locate complete data run in blktrace output):\n", __SPECBUF_SIZE)
+			spectrace_dump()
+			exit()
+		}
+		delete qsect_ts[blk_direction_write(rw), sector]
+	}
+	if (dtime)
+		delete dsect_ts[blk_direction_write(rw), sector]
+}
+
+function blk_requeue(maj, min, what, rw, ts, sector, bytes, err)
+{
+	event = __print_act_with_err(maj, min, what, rw, ts, sector, bytes, err)
+	spectrace_trace(event)
+}
+
+function blk_issue(maj, min, what, rw, ts, sector, bytes)
+{
+	dsect_ts[blk_direction_write(rw), sector] = ts
+
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+}
+
+function blk_insert(maj, min, what, rw, ts, sector, bytes)
+{
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+}
+
+function blk_queue(maj, min, what, rw, ts, sector, bytes)
+{
+	qsect_ts[blk_direction_write(rw), sector] = ts
+
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+}
+
+function blk_bounce(maj, min, what, rw, ts, sector, bytes)
+{
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+}
+
+function blk_back_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	delete qsect_ts[blk_direction_write(rw), sector]
+
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+}
+
+function find_prev(rw, sector)
+{
+	for (i = 1; i <= 128; i++)
+		if (qsect_ts[blk_direction_write(rw), sector - i * 8])
+			return sector - i * 8
+
+	return 0
+}
+
+function blk_front_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+
+	prev = find_prev(rw, sector)
+	if (prev) {
+		prev_ts = qsect_ts[blk_direction_write(rw), sector]
+		delete qsect_ts[blk_direction_write(rw), sector]
+		qsect_ts[blk_direction_write(rw), sector] = prev_ts
+	}
+}
+
+function blk_getrq(maj, min, what, rw, ts, sector, bytes)
+{
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+}
+
+function blk_sleeprq(maj, min, what, rw, ts, sector, bytes)
+{
+	event = __print_act_with_name(maj, min, what, rw, ts, sector, bytes, execname())
+	spectrace_trace(event)
+}
+
+function blk_plug(maj, min, what, rw, ts)
+{
+	event = __print_common(maj, min, what, rw, ts)
+	name = sprintf(" [%s]\n", execname())
+	event .= name
+	spectrace_trace(event)
+}
+
+function blk_unplug_io(maj, min, what, rw, ts, pdu_int)
+{
+	event = __print_common(maj, min, what, rw, ts)
+	name = sprintf(" [%s] %d\n", execname(), pdu_int)
+	event .= name
+	spectrace_trace(event)
+}
+
+function blk_unplug_timer(maj, min, what, rw, ts, pdu_int)
+{
+	event = __print_common(maj, min, what, rw, ts)
+	name = sprintf(" [%s] %d\n", execname(), pdu_int)
+	event .= name
+	spectrace_trace(event)
+}
+
+function blk_remap(maj, min, what, rw, ts, sector, bytes, rmaj, rmin, remap_sector)
+{
+	event = __print_common(maj, min, what, rw, ts)
+	name = sprintf(" %d + %d <- (%d,%d) %d\n", sector, __n_sectors(bytes), rmaj, rmin, remap_sector) 
+	event .= name
+	spectrace_trace(event)
+}
+
+function blk_split(maj, min, what, rw, ts, sector, pdu_int)
+{
+	__print_common(maj, min, what, rw, ts)
+	printf(" %d / %d [%s]", sector, pdu_int, execname()) 
+	printf("\n")
+	spectrace_trace(event)
+}
+
+function __print_sect_and_err(sector, bytes, err)
+{
+	return sprintf(" %d + %d [%d]", sector, __n_sectors(bytes), err)
+}
+
+function __print_sect_and_name(sector, bytes, name)
+{
+	return sprintf(" %d + %d [%s]", sector, __n_sectors(bytes), name)
+}
+
+function make_rwbs(rw)
+{
+	rwbs = blk_direction_write_str(rw)
+	rwbs .= blk_bio_rw_ahead(rw) ? "A" : ""
+	rwbs .= blk_bio_rw_barrier(rw) ? "B" : ""
+	rwbs .= blk_bio_rw_sync(rw) ? "S" : ""
+	rwbs .= blk_bio_rw_meta(rw) ? "M" : ""
+
+	return rwbs
+}
+
+function __print_common(maj, min, what, rw, ts)
+{
+	return sprintf("%3d,%-3d %2d %5d.%09d %5d %2s %3s",
+			maj, min,
+			cpu(),
+			ts_s(ts), ts_ns(ts),
+			pid(),
+			__blk_action(what),
+			make_rwbs(rw))
+}
+
+function __print_act_with_err(maj, min, what, rw, ts, sector, bytes, err)
+{
+	common = __print_common(maj, min, what, rw, ts)
+	if (__BLK_TA_ACT(what) & __BLK_TC_ACT(__BLK_TC_PC))
+		sect = ""
+	else
+		sect = __print_sect_and_err(sector, bytes, error)
+
+	return common . sect . "\n"
+}
+
+function __print_act_with_name(maj, min, what, rw, ts, sector, bytes, name)
+{
+	common = __print_common(maj, min, what, rw, ts)
+	if (__BLK_TA_ACT(what) & __BLK_TC_ACT(__BLK_TC_PC))
+		sect = ""
+	else
+		sect = __print_sect_and_name(sector, bytes, name)
+	return common . sect . "\n"
+}

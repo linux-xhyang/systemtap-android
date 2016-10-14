@@ -1,0 +1,19 @@
+
+#! /usr/bin/env stap
+
+/*probe kernel.function("sys_fadvise64_64") {
+ printf("%s\n",execname());
+ }
+*/
+global targetpid;
+probe begin {
+    targetpid = target();
+}
+
+probe kernel.function("io_schedule"),kernel.function("io_schedule").return,kernel.function("unlock_page") {
+    if(pid() == targetpid){
+        printf("%s %d\n",execname(),pid());
+        print_backtrace();
+        printf("\n ##################################\n ");
+    }
+}

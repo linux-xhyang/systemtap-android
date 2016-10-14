@@ -10,19 +10,25 @@
 # published by the Free Software Foundation.
 #
 
-global reads, writes, total_io
+global reads, writes, total_io, reads_task, writes_task, total_io_task
 
 probe vfs.read.return {
   if ($return > 0) {
-    reads[pid(),execname()] += $return
-    total_io[pid(),execname()] += $return
+      filename = __file_filename($file)
+      reads_task[devname,filename] += $return
+      total_io_task[devname,filename] += $return
+      reads[pid(),execname()] += $return
+      total_io[pid(),execname()] += $return
   }
 }
 
 probe vfs.write.return {
   if ($return > 0) {
-    writes[pid(),execname()] += $return
-    total_io[pid(),execname()] += $return
+      filename = __file_filename($file)
+      writes_task[devname,filename] += $return
+      total_io_task[devname,filename] += $return
+      writes[pid(),execname()] += $return
+      total_io[pid(),execname()] += $return
   }
 }
 
@@ -38,11 +44,16 @@ function humanreadable(bytes) {
   }
 }
 
-probe timer.s(1) {
+probe timer.s(2) {
   foreach([p,e] in total_io- limit 10)
     printf("%8d %15s r: %12s w: %12s\n",
            p, e, humanreadable(reads[p,e]),
            humanreadable(writes[p,e]))
+  printf("################################\n")
+  foreach([m,n] in total_io_task- limit 10)
+  printf("%15s %15s r: %12s w: %12s\n",
+         m, n, humanreadable(reads_task[m,n]),
+         humanreadable(writes_task[m,n]))
   printf("\n")
   # Note we don't zero out reads, writes and total_io,
   # so the values are cumulative since the script started.

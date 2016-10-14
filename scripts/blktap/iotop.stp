@@ -1,0 +1,228 @@
+/*
+ * iotop - periodically display top I/O producers
+ *
+ * Copyright (C) 2007 Tom Zanussi <zanussi@comcast.net>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * Usage: run this script while running blktrace in another shell e.g.
+ *
+ * # stap -I tapsets iotop.stp
+ * # btrace /dev/hda
+ *
+ * Change top_n in script to change number of processes displayed
+ *
+ */
+
+global top_n = 20
+global dont_clear = 0 /* don't clear totals each time */
+global dirty_acct = 1 /* if set, account writes to dirtying process */
+
+probe begin
+{
+	printf("Displaying top %d I/O producing processes every 5 seconds...\n\n", top_n)
+}
+
+global tracked_pids
+
+global qrk_by_pid
+global qwk_by_pid
+global iok_by_pid
+
+function display(n)
+{
+	display_n = n
+	printf("%8s %-25s %-8s %-8s %-8s\n",
+		"PID  ","EXECNAME",
+		"TOTAL(k)","QR(k)   ","QW(k)   ")
+
+	printf("%8s %-25s %-8s %-8s %-8s\n",
+		"--------",
+		"--------","--------","--------","--------")
+
+	foreach (pid in iok_by_pid-) {
+		pidname = tracked_pids[pid]
+		printf("%8d %-25s %-8d %-8d %-8d\n", pid,
+			pidname, kib(iok_by_pid[pid]),
+			kib(qrk_by_pid[pid]),
+			kib(qwk_by_pid[pid]))
+
+		if (!--display_n)
+			break
+	}
+	printf("\n")
+}
+
+function clear()
+{
+	if (dont_clear)
+		return 0
+
+	delete qrk_by_pid
+	delete qwk_by_pid
+	delete iok_by_pid
+}
+
+probe timer.ms(5000)
+{
+	display(top_n)
+	clear()
+}
+
+function track_pid(pid, execname)
+{
+	tracked_pids[pid] = execname
+}
+
+function kib(bytes)
+{
+	return bytes >> 10
+}
+
+probe end
+{
+	display(1000000)
+}
+
+global dirty_page_pids[262144]
+
+function account_bio_dirty_pages(bio)
+{
+	n_segments = __bio_segments(bio)
+	bi_idx = __bio_bi_idx(bio)
+	for (i = bi_idx; i < bi_idx + n_segments; i++) {
+		bv_len = __bio_bv_len(bio, i)
+		bv_page = __bio_bv_page(bio, i)
+		accountable_pid = dirty_page_pids[bv_page]
+		if (accountable_pid) {
+			qwk_by_pid[accountable_pid] += bv_len
+			iok_by_pid[accountable_pid] += bv_len
+			delete dirty_page_pids[bv_page]
+		} else {
+			pid = pid()
+			qwk_by_pid[pid] += bv_len
+			iok_by_pid[pid] += bv_len
+		}
+	}
+}
+
+probe kernel.function("submit_bio")
+{
+	if (!dirty_acct)
+		next
+
+	if ($rw & __WRITE)
+		account_bio_dirty_pages($bio)
+}
+
+probe vfs.__set_page_dirty_buffers
+{
+	if (!dirty_acct)
+		next
+
+	pid = pid()
+	track_pid(pid, execname())
+
+	dirty_page_pids[__page] = pid
+}
+
+/* overridden blktrace.stp handlers */
+
+global counts
+function blk_complete(maj, min, what, rw, ts, sector, bytes, err)
+{
+	printf("")
+}
+
+function blk_requeue(maj, min, what, rw, ts, sector, bytes, err)
+{
+	printf("")
+}
+
+function blk_issue(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_insert(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_queue(maj, min, what, rw, ts, sector, bytes)
+{
+	pid = pid()
+	track_pid(pid, execname())
+
+	if (blk_direction_write(rw)) {
+		if (!dirty_acct) {
+			qwk_by_pid[pid] += bytes
+			iok_by_pid[pid] += bytes
+		}
+	} else {
+		qrk_by_pid[pid] += bytes
+		iok_by_pid[pid] += bytes
+	}
+}
+
+function blk_bounce(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_back_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_front_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_getrq(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_sleeprq(maj, min, what, rw, ts, sector, bytes)
+{
+	printf("")
+}
+
+function blk_plug(maj, min, what, rw, ts)
+{
+	printf("")
+}
+
+function blk_unplug_io(maj, min, what, rw, ts, pdu_int)
+{
+	printf("")
+}
+
+function blk_unplug_timer(maj, min, what, rw, ts, pdu_int)
+{
+	printf("")
+}
+
+function blk_remap(maj, min, what, rw, ts, sector, bytes, rmaj, rmin, remap_sector)
+{
+	printf("")
+}
+
+function blk_split(maj, min, what, rw, ts, sector, pdu_int)
+{
+	printf("")
+}

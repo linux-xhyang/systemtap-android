@@ -1,0 +1,488 @@
+/*
+ * blktrace tapset - make blktrace 'events' available to SystemTap
+ *
+ * Copyright (C) 2007 Tom Zanussi <zanussi@comcast.net>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ */
+
+/*
+ * All the available blktrace events as functions, called when the
+ * corresponding event occurs in the kernel.  The params supply the
+ * relevant data associated with the event.
+ *
+ * NOTE: end-user scripts override these functions in order to be notified
+ * when the interesting event(s) occur.  Currently, in order for the end-user
+ * script to receive *any* call, *all* the calls must be overridden in the
+ * end-user script - for events the script doesn't care about, just use an
+ * empty body but containing do-nothing code that doesn't get
+ * optimized out e.g. copy the ones here and add printf("") to each.
+ */
+
+function blk_complete(maj, min, what, rw, ts, sector, bytes, err) { }
+function blk_requeue(maj, min, what, rw, ts, sector, bytes, err) { }
+function blk_issue(maj, min, what, rw, ts, sector, bytes) { }
+function blk_insert(maj, min, what, rw, ts, sector, bytes) { }
+function blk_queue(maj, min, what, rw, ts, sector, bytes) { }
+function blk_bounce(maj, min, what, rw, ts, sector, bytes) { }
+function blk_back_merge(maj, min, what, rw, ts, sector, bytes) { }
+function blk_front_merge(maj, min, what, rw, ts, sector, bytes) { }
+function blk_getrq(maj, min, what, rw, ts, sector, bytes) { }
+function blk_sleeprq(maj, min, what, rw, ts, sector, bytes) { }
+function blk_plug(maj, min, what, rw, ts) { }
+function blk_unplug_io(maj, min, what, rw, ts, pdu_int) { }
+function blk_unplug_timer(maj, min, what, rw, ts, pdu_int) { }
+function blk_remap(maj, min, what, rw, ts, sector, bytes, rmaj, rmin, rsector) { }
+function blk_split(maj, min, what, rw, ts, sector, pdu_int) { }
+
+/*
+ * blktrace tapset 'helper' functions
+ */
+
+/* Calling this gets the tapset loaded and the probe set up (and
+ * the 'callbacks' registered, if nothing else in the script uses
+ * the tapset.  Might as well just always put this in a 'begin'
+ * in scripts.
+ */
+function use_blktrace() {}
+
+function blk_direction_write(rw)
+{
+	return rw & __WRITE
+}
+
+/* string representation of direction */
+function blk_direction_write_str(rw)
+{
+	return blk_direction_write(rw) ? "W" : "R"
+}
+
+/* string representation of rwflag modifiers */
+function blk_bio_rwflags_str(rw)
+{
+	str = blk_direction_write_str(rw)
+	if (blk_bio_rw_barrier(rw))
+		str .= "B"
+	if (blk_bio_rw_sync(rw))
+		str .= "S"
+	if (blk_bio_rw_ahead(rw))
+		str .= "A"
+	if (blk_bio_rw_meta(rw))
+		str .= "M"
+
+	return str
+}
+
+function blk_bio_rw_barrier(rw)
+{
+	return rw & (1 << __BIO_RW_BARRIER)
+}
+
+function blk_bio_rw_sync(rw)
+{
+	return rw & (1 << __BIO_RW_SYNC)
+}
+
+function blk_bio_rw_ahead(rw)
+{
+	return rw & (1 << __BIO_RW_AHEAD)
+}
+
+function blk_bio_rw_meta(rw)
+{
+	return rw & (1 << __BIO_RW_META)
+}
+
+function blk_action_name(act)
+{
+	return __blk_action_name[__BLK_TA_ACT(act)]
+}
+
+/* timestamp functions */
+
+function ts_s(ts)
+{
+	return ts / 1000000000
+}
+
+function ts_ns(ts)
+{
+	return ts % 1000000000
+}
+
+/* Adapted from blktrace_api.h */
+
+global __BLK_TC_READ, __BLK_TC_WRITE, __BLK_TC_BARRIER, __BLK_TC_SYNC,
+	__BLK_TC_QUEUE, __BLK_TC_REQUEUE, __BLK_TC_ISSUE, __BLK_TC_COMPLETE,
+        __BLK_TC_FS, __BLK_TC_PC, __BLK_TC_NOTIFY, __BLK_TC_AHEAD, __BLK_TC_META,
+        __BLK_TC_END
+
+probe begin(-1) {
+	__BLK_TC_READ     = 1 << 0       /* reads */
+        __BLK_TC_WRITE    = 1 << 1       /* writes */
+        __BLK_TC_BARRIER  = 1 << 2       /* barrier */
+        __BLK_TC_SYNC     = 1 << 3       /* sync */
+        __BLK_TC_QUEUE    = 1 << 4       /* queueing/merging */
+        __BLK_TC_REQUEUE  = 1 << 5       /* requeueing */
+        __BLK_TC_ISSUE    = 1 << 6       /* issue */
+        __BLK_TC_COMPLETE = 1 << 7       /* completions */
+        __BLK_TC_FS       = 1 << 8       /* fs requests */
+        __BLK_TC_PC       = 1 << 9       /* pc requests */
+        __BLK_TC_NOTIFY   = 1 << 10      /* special message */
+        __BLK_TC_AHEAD    = 1 << 11      /* readahead */
+        __BLK_TC_META     = 1 << 12      /* metadata */
+
+        __BLK_TC_END      = 1 << 15      /* only 16-bits, reminder */
+}
+
+global __BLK_TA_QUEUE, __BLK_TA_BACKMERGE, __BLK_TA_FRONTMERGE,
+        __BLK_TA_GETRQ, __BLK_TA_SLEEPRQ, __BLK_TA_REQUEUE, __BLK_TA_ISSUE,
+        __BLK_TA_COMPLETE, __BLK_TA_PLUG, __BLK_TA_UNPLUG_IO,
+        __BLK_TA_UNPLUG_TIMER, __BLK_TA_INSERT, __BLK_TA_SPLIT,
+        __BLK_TA_BOUNCE, __BLK_TA_REMAP
+
+global __blk_action
+global __blk_action_name
+global __N_ACTIONS
+probe begin(-1) {
+	__N_ACTIONS = 15
+
+        __BLK_TA_QUEUE = 1             /* queued */
+        __BLK_TA_BACKMERGE = 2         /* back merged to existing rq */
+        __BLK_TA_FRONTMERGE = 3        /* front merge to existing rq */
+        __BLK_TA_GETRQ = 4             /* allocated new request */
+        __BLK_TA_SLEEPRQ = 5           /* sleeping on rq allocation */
+        __BLK_TA_REQUEUE = 6           /* request requeued */
+        __BLK_TA_ISSUE = 7             /* sent to driver */
+        __BLK_TA_COMPLETE = 8          /* completed by driver */
+        __BLK_TA_PLUG = 9              /* queue was plugged */
+        __BLK_TA_UNPLUG_IO = 10        /* queue was unplugged by io */
+        __BLK_TA_UNPLUG_TIMER = 11     /* queue was unplugged by timer */
+        __BLK_TA_INSERT = 12           /* insert request */
+        __BLK_TA_SPLIT = 13            /* bio was split */
+        __BLK_TA_BOUNCE = 14           /* bio was bounced */
+        __BLK_TA_REMAP = 15            /* bio was remapped */
+
+	__blk_action[__BLK_TA_QUEUE] = "Q"
+	__blk_action[__BLK_TA_BACKMERGE] = "M"
+	__blk_action[__BLK_TA_FRONTMERGE] = "F"
+	__blk_action[__BLK_TA_GETRQ] = "G"
+	__blk_action[__BLK_TA_SLEEPRQ] = "S"
+	__blk_action[__BLK_TA_REQUEUE] = "R"
+	__blk_action[__BLK_TA_ISSUE] = "D"
+	__blk_action[__BLK_TA_COMPLETE] = "C"
+	__blk_action[__BLK_TA_PLUG] = "P"
+	__blk_action[__BLK_TA_UNPLUG_IO] = "U"
+	__blk_action[__BLK_TA_UNPLUG_TIMER] = "UT"
+	__blk_action[__BLK_TA_INSERT] = "I"
+	__blk_action[__BLK_TA_SPLIT] = "X"
+	__blk_action[__BLK_TA_BOUNCE] = "B"
+	__blk_action[__BLK_TA_REMAP] = "A"
+
+	__blk_action_name[__BLK_TA_QUEUE] = "queue"
+	__blk_action_name[__BLK_TA_BACKMERGE] = "backmerge"
+	__blk_action_name[__BLK_TA_FRONTMERGE] = "frontmerge"
+	__blk_action_name[__BLK_TA_GETRQ] = "get request"
+	__blk_action_name[__BLK_TA_SLEEPRQ] = "sleep request"
+	__blk_action_name[__BLK_TA_REQUEUE] = "requeue"
+	__blk_action_name[__BLK_TA_ISSUE] = "issue"
+	__blk_action_name[__BLK_TA_COMPLETE] = "complete"
+	__blk_action_name[__BLK_TA_PLUG] = "plug"
+	__blk_action_name[__BLK_TA_UNPLUG_IO] = "unplug"
+	__blk_action_name[__BLK_TA_UNPLUG_TIMER] = "unplug timer"
+	__blk_action_name[__BLK_TA_INSERT] = "insert"
+	__blk_action_name[__BLK_TA_SPLIT] = "split"
+	__blk_action_name[__BLK_TA_BOUNCE] = "bounce"
+	__blk_action_name[__BLK_TA_REMAP] = "remap"
+}
+
+/* rw direction flag, defined in fs.h */
+global __WRITE
+
+/* bio bi_rw flags, from linux/bio.h */
+global __BIO_RW, __BIO_RW_AHEAD, __BIO_RW_BARRIER, __BIO_RW_FAILFAST,
+	__BIO_RW_SYNC, __BIO_RW_META
+
+probe begin(-1) {
+	__WRITE = 1
+
+	__BIO_RW = 0
+	__BIO_RW_AHEAD = 1
+	__BIO_RW_BARRIER = 2
+	__BIO_RW_FAILFAST = 3
+	__BIO_RW_SYNC = 4
+	__BIO_RW_META = 5
+}
+
+global __BLK_TC_SHIFT
+probe begin(-1) {
+	__BLK_TC_SHIFT = 16
+}
+
+global __MINORBITS
+global __MINORMASK
+probe begin(-1) {
+	__MINORBITS = 20
+	__MINORMASK = (1 << __MINORBITS) - 1
+}
+
+function __BLK_MAJOR(dev)
+{
+	return dev >> __MINORBITS
+}
+
+function __BLK_MINOR(dev)
+{
+	return dev & __MINORMASK
+}
+
+function __BLK_TC_ACT(act) { return ((act) << __BLK_TC_SHIFT) }
+function __BLK_TA_ACT(act) { return ((act) & 0xffff) }
+
+function __blk_action(act)
+{
+	return __blk_action[__BLK_TA_ACT(act)]
+}
+
+function __n_sectors(bytes)
+{
+	return bytes >> 9
+}
+
+%{
+#include <linux/blktrace_api.h>
+#define bio_iovec_idx(bio, idx) (&((bio)->bi_io_vec[(idx)]))
+%}
+
+/* for a pointer to a blk_io_trace_remap, get remap target device */
+function __get_remap_device:long (remap:long) %{ /* pure */
+    /*
+	__be32 device = 0;
+	struct blk_io_trace_remap *remap = (struct blk_io_trace_remap *)(long)THIS->remap;
+
+	device = deref(sizeof(__be32), &remap->device);
+	if (0) {
+deref_fault:
+		CONTEXT->last_error = "pointer dereference fault";
+	}
+	THIS->__retvalue = be32_to_cpu(device);
+    */
+%}
+
+/* for a pointer to a blk_io_trace_remap, get remap target sector */
+function __get_remap_sector:long (remap:long) %{ /* pure */
+    /*
+	__be64 sector = 0;
+	struct blk_io_trace_remap *remap = (struct blk_io_trace_remap *)(long)THIS->remap;
+
+	sector = remap->sector;
+//	sector = deref(sizeof(__be64), &remap->sector);
+//	if (0) {
+//deref_fault:
+//		CONTEXT->last_error = "pointer dereference fault";
+//	}
+	THIS->__retvalue = be64_to_cpu(sector);
+    */
+%}
+
+/* for a pointer to a pdu_int, unbe the pointed-to value */
+function __get_pdu_int:long (pdu_intp:long) %{ /* pure */
+    /*
+	__be64 *pdu_int = (__be64 *)(long)THIS->pdu_intp;
+
+	deref(sizeof(pdu_int), pdu_int);
+	if (0) {
+deref_fault:
+		CONTEXT->last_error = "pointer dereference fault";
+	}
+	THIS->__retvalue = be64_to_cpu(*pdu_int);
+    */
+%}
+
+global __start_ts
+probe begin
+{
+	__start_ts = 0
+}
+
+/*
+ * 'main' dispatching function.  The probe is put on common blktrace
+ * function __blk_add_trace(), and the common handler calls user-defined
+ * 'callback' handlers for each event type.
+ */
+probe kernel.function("__blk_add_trace") {
+	ts = gettimeofday_ns()
+	if (!__start_ts)
+		__start_ts = ts
+	ts -= __start_ts
+
+	maj = __BLK_MAJOR($bt->dev)
+	min = __BLK_MINOR($bt->dev)
+
+	/* call user-defined 'callback' for corresponding 'action' */
+
+	if (__BLK_TA_ACT($what) == __BLK_TA_COMPLETE) /* 'C' */
+		blk_complete(maj, min, $what, $rw, ts, $sector, $bytes, $error)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_REQUEUE) /* 'R' */
+		blk_requeue(maj, min, $what, $rw, ts, $sector, $bytes, $error)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_ISSUE) /* 'D' */
+		blk_issue(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_INSERT) /* 'I' */
+		blk_insert(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_QUEUE) /* 'Q' */
+		blk_queue(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_BOUNCE) /* 'B' */
+		blk_bounce(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_BACKMERGE) /* 'M' */
+		blk_back_merge(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_FRONTMERGE) /* 'F' */
+		blk_front_merge(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_GETRQ) /* 'G' */
+		blk_getrq(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_SLEEPRQ) /* 'S' */
+		blk_sleeprq(maj, min, $what, $rw, ts, $sector, $bytes)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_PLUG) /* 'P' */
+		blk_plug(maj, min, $what, $rw, ts)
+	else if (__BLK_TA_ACT($what) == __BLK_TA_UNPLUG_IO) /* 'U' */
+		blk_unplug_io(maj, min, $what, $rw, ts, __get_pdu_int($pdu_data))
+	else if (__BLK_TA_ACT($what) == __BLK_TA_UNPLUG_TIMER) /* 'T' */
+		blk_unplug_timer(maj, min, $what, $rw, ts, __get_pdu_int($pdu_data))
+	else if (__BLK_TA_ACT($what) == __BLK_TA_REMAP) /* 'A' */
+		blk_remap(maj, min, $what, $rw, ts, $sector, $bytes,
+			__BLK_MAJOR(__get_remap_device($pdu_data)),
+			__BLK_MINOR(__get_remap_device($pdu_data)),
+			__get_remap_sector($pdu_data))
+	else if (__BLK_TA_ACT($what) == __BLK_TA_SPLIT) /* 'X' */
+		blk_split(maj, min, $what, $rw, ts, $sector, __get_pdu_int($pdu_data))
+}
+
+/* The below should probably be part of other tapsets */
+
+probe vfs.__set_page_dirty_nobuffers = kernel.function ("__set_page_dirty_nobuffers")
+{
+	__page = $page
+	dev = __page_dev(__page)
+	devname = __find_bdevname(dev, __page_bdev(__page))
+	ino = __page_ino(__page)
+
+	index = $page->index
+
+	name = "__set_page_dirty_nobuffers"
+	argstr = sprintf("%d", page_index)
+
+	size = 1
+	units = "pages"
+}
+probe vfs.__set_page_dirty_nobuffers.return = kernel.function ("__set_page_dirty_nobuffers").return
+{
+	name = "__set_page_dirty_nobuffers"
+	retstr = sprintf("%d", $return)
+
+	if ($return == 1) {
+		size = 1
+		units = "pages"
+	}
+}
+
+%{
+#include <linux/bio.h>
+#include <linux/genhd.h>
+%}
+
+/* get sector from bio */
+function __bio_sector:long(bio:long)
+%{
+        struct bio  *bio;
+
+        bio = (struct bio *)(long)STAP_ARG_bio;
+        THIS->__retvalue = bio->bi_iter.bi_size >> 9;
+
+        if (0) {
+deref_fault:
+                CONTEXT->last_error = "pointer dereference fault";
+        }
+end: ;
+%}
+
+/* get number of unsent segments in bio */
+function __bio_segments:long(bio:long) /* unmangled */
+%{
+        struct bio  *bio;
+
+        bio = (struct bio *)(long)STAP_ARG_bio;
+        THIS->__retvalue = bio_segments(bio);
+
+        if (0) {
+deref_fault:
+                CONTEXT->last_error = "pointer dereference fault";
+        }
+end: ;
+%}
+
+/* get idx of first unsent segment in bio */
+function __bio_bi_idx:long(bio:long)
+%{
+        struct bio  *bio;
+
+        bio = (struct bio *)(long)STAP_ARG_bio;
+        THIS->__retvalue = bio->bi_iter.bi_idx;
+
+        if (0) {
+deref_fault:
+                CONTEXT->last_error = "pointer dereference fault";
+        }
+end: ;
+%}
+
+/* get length of given segment in bio */
+function __bio_bv_len:long(bio:long,bi_idx:long)
+%{
+        struct bio *bio;
+	struct bio_vec *bv;
+	int bi_idx;
+
+  bio = (struct bio *)(long)STAP_ARG_bio;
+        bi_idx = bio->bi_iter.bi_idx;
+	bv = bio_iovec_idx(bio, bi_idx);
+
+        THIS->__retvalue = bv->bv_len;
+
+        if (0) {
+deref_fault:
+                CONTEXT->last_error = "pointer dereference fault";
+        }
+end: ;
+%}
+
+/* get page of given segment in bio */
+function __bio_bv_page:long(bio:long,bi_idx:long)
+%{
+        struct bio *bio;
+	struct bio_vec *bv;
+	int bi_idx;
+
+  bio = (struct bio *)(long)STAP_ARG_bio;
+        bi_idx = bio->bi_iter.bi_idx;
+	bv = bio_iovec_idx(bio, bi_idx);
+
+        THIS->__retvalue = (unsigned long)bv->bv_page;
+
+        if (0) {
+deref_fault:
+                CONTEXT->last_error = "pointer dereference fault";
+        }
+end: ;
+%}

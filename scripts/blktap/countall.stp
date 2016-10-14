@@ -1,0 +1,140 @@
+/*
+ * countall - display counts of all blktrace events
+ *
+ * Copyright (C) 2007 Tom Zanussi <zanussi@comcast.net>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * Usage: run this script while running blktrace in another shell e.g.
+ *
+ * # stap -I tapsets countall.stp
+ * # btrace /dev/hda
+ *
+ */
+
+global counts
+global bytes
+
+function kib(bytes)
+{
+	return bytes >> 10
+}
+
+probe end {
+	printf("\n%-3s %-3s %-15s %-5s %-8s %-8s\n",
+		"MAJ", "MIN", "ACTION", "RW(*)", "COUNT", "KiB")
+	printf("%-3s %-3s %-15s %-5s %-8s %-8s\n",
+		"---", "---", "---------------", "-----",
+		"--------", "--------")
+	foreach ([event+, rw, maj, min] in counts) {
+		printf("%-3d %-3d %-15s %-5s %-8d %-8d\n", maj, min, event,
+		blk_bio_rwflags_str(rw), counts[event, rw, maj, min],
+		kib(bytes[event, rw, maj, min]))
+	}
+	printf("\n(*) R=Read, W=Write, A=readAhead, M=Meta, S=Sync, B=Barrier\n\n")
+}
+
+function log_count(what, rw, maj, min)
+{
+	counts[blk_action_name(what), rw, maj, min]++
+}
+
+function log_bytes(what, rw, maj, min, bytes)
+{
+	bytes[blk_action_name(what), rw, maj, min] += bytes
+}
+
+function log_all(what, rw, maj, min, bytes)
+{
+	log_count(what, rw, maj, min)
+	log_bytes(what, rw, maj, min, bytes)
+}
+
+/* overridden blktrace.stp handlers */
+
+function blk_complete(maj, min, what, rw, ts, sector, bytes, err)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_requeue(maj, min, what, rw, ts, sector, bytes, err)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_issue(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_insert(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_queue(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_bounce(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_back_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_front_merge(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_getrq(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_sleeprq(maj, min, what, rw, ts, sector, bytes)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_plug(maj, min, what, rw, ts)
+{
+	log_count(what, rw, maj, min)
+}
+
+function blk_unplug_io(maj, min, what, rw, ts, pdu_int)
+{
+	log_count(what, rw, maj, min)
+}
+
+function blk_unplug_timer(maj, min, what, rw, ts, pdu_int)
+{
+	log_count(what, rw, maj, min)
+}
+
+function blk_remap(maj, min, what, rw, ts, sector, bytes, rmaj, rmin, remap_sector)
+{
+	log_all(what, rw, maj, min, bytes)
+}
+
+function blk_split(maj, min, what, rw, ts, sector, pdu_int)
+{
+	log_count(what, rw, maj, min)
+}

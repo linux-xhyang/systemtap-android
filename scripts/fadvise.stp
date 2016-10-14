@@ -1,0 +1,12 @@
+
+#! /usr/bin/env stap
+
+/*probe kernel.function("sys_fadvise64_64") {
+    printf("%s\n",execname());
+    }
+*/
+probe kernel.function("submit_bio") {
+    printf("%s %s\n",execname(),$$parms$$);
+    print_backtrace();
+    printf("\n ##################################\n ");
+}
