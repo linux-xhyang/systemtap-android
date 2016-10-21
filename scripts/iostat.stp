@@ -9,6 +9,8 @@
 global targetpid;
 global iotime;
 global filemap;
+global iowrites;
+
 /**
  * sfunction MAJOR - Extract major device number from a kernel device number (kdev_t)
  *
@@ -42,11 +44,11 @@ function print_time:string(ts:long)
     #endif
 %}
 
-function app_process:long(task:long)
+function app_process:long(task:long,parent:long)
 {
     if(targetpid)
         return 1;
-    i = 3;
+    i = parent;
     while (task_pid(task) > 1) {
         if(__file_filename(task_exe_file(task)) == "app_process32")
             return 1;
@@ -74,8 +76,7 @@ probe generic.fop.aio_read.return  {
         dev = __file_dev(file)
         devname = __find_bdevname(dev, __file_bdev(file))
         if(devname == "mmcblk0p11" || devname == "mmcblk0p17"){
-            c = task_current();
-            if(app_process(c))
+            if(!targetpid || (targetpid && (pid() == targetpid)))
                 iotime["iotime",pid(),tid(),devname,__file_filename(file),__file_ino(file),file] += (local_clock_us() - @entry(local_clock_us()));
         }
     }
@@ -88,11 +89,52 @@ probe kernel.function("filemap_fault").return{
         dev = __file_dev(file)
         devname = __find_bdevname(dev, __file_bdev(file))
         if(devname == "mmcblk0p11" || devname == "mmcblk0p17"){
-            filemap["filemap",pid(),$vmf,devname,__file_filename(file),__file_ino(file),file] += (local_clock_us() - @entry(local_clock_us()));
+            fault_type = $return;
+            if (vm_fault_contains(fault_type,VM_FAULT_MAJOR))
+                if(!targetpid || (targetpid && (pid() == targetpid)))
+                    filemap["filemap",pid(),$vmf,devname,__file_filename(file),__file_ino(file),file] += (local_clock_us() - @entry(local_clock_us()));
         }
     }
 }
 
+probe generic.fop.aio_write.return{
+    if(!file_isdir(file)){
+        dev = __file_dev(file);
+        devname = __find_bdevname(dev,__file_bdev(file))
+        if(devname == "mmcblk0p17"){
+            if(!targetpid || (targetpid && (pid() == targetpid)))
+                iowrites["iowrites",pid(),tid(),devname,__file_filename(file),__file_ino(file),file] += (local_clock_us() - @entry(local_clock_us()));
+        }
+    }
+}
+
+@__private30 function _IS_ERR:long(ptr:long) %{ /* pure */
+    STAP_RETVALUE = IS_ERR((const void *)(long)STAP_ARG_ptr);
+%}
+
+function user_string_copy:string(src:long) %{
+#define EMBEDDED_NAME_MAX	(PATH_MAX - sizeof(struct filename))
+
+        strncpy_from_user(STAP_RETVALUE,(char *)STAP_ARG_src,EMBEDDED_NAME_MAX);
+%}
+
+probe kernel.function("do_filp_open").return{
+    if(1){
+        file = $return;
+        if(_IS_ERR(file)) next
+        c = task_current();
+        if(app_process(c,3))
+            if(!file_isdir(file)){
+                dev = __file_dev(file)
+                devname = __find_bdevname(dev, __file_bdev(file))
+                if(devname == "mmcblk0p11" || devname == "mmcblk0p17"){
+                    printf("%s\n",fullpath_struct_file(c,file));
+                    //printf("%s\n",user_string(@entry(pointer_arg(1))));
+                    //printf("%s\n",user_string_copy($pathname));
+                }
+            }
+    }
+}
 
 probe end{
     //foreach([p,n,e] in iotime- limit 20)
@@ -107,15 +149,24 @@ probe end{
     printf("%7s %5d %16s %32s %8d %d\n",var0,var1,var3,var4,var5,filemap[var0,var1,var2,var3,var4,var5,var6])
     delete iotime;
     delete filemap;
+    delete iowrites;
 }
 
+probe timer.s(1) {
+    if(0){
+        printf("iotime %s #####\n",print_time(local_clock_ns()))
+        foreach([s,p,t,n,e,i,f] in iotime- limit 20)
+        printf("%7s %5d %16s %32s %8d %d\n",s,p,n,e,i,iotime[s,p,t,n,e,i,f])
 
-probe timer.s(20) {
-    printf("iotime %s #####\n",print_time(local_clock_ns()))
-    foreach([s,p,t,n,e,i,f] in iotime- limit 30)
-    printf("%7s %5d %16s %32s %8d %d\n",s,p,n,e,i,iotime[s,p,t,n,e,i,f])
+        printf("filemap %s #####\n",print_time(local_clock_ns()))
+        foreach([var0,var1,var2,var3,var4,var5,var6] in filemap- limit 20)
+        printf("%7s %5d %16s %32s %8d %d\n",var0,var1,var3,var4,var5,filemap[var0,var1,var2,var3,var4,var5,var6])
 
-    printf("filemap %s #####\n",print_time(local_clock_ns()))
-    foreach([var0,var1,var2,var3,var4,var5,var6] in filemap- limit 30)
-    printf("%7s %5d %16s %32s %8d %d\n",var0,var1,var3,var4,var5,filemap[var0,var1,var2,var3,var4,var5,var6])
+        printf("iowrites %s #####\n",print_time(local_clock_ns()))
+        foreach([v0,v1,v2,v3,v4,v5,v6] in iowrites- limit 20)
+        printf("%7s %5d %16s %32s %8d %d\n",v0,v1,v3,v4,v5,iowrites[v0,v1,v2,v3,v4,v5,v6])
+    }
+    delete iowrites;
+    delete iotime;
+    delete filemap;
 }
