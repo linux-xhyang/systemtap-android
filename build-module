@@ -34,6 +34,7 @@ COMPILER_PREFIX_LIST_ARM=("arm-none-linux-gnueabi-")
 COMPILER_PREFIX_LIST_X86=("" "i686-linux-android-")
 
 export SYSTEMTAP_TAPSET=${TAPSETS}
+PROBE_FUNC=" "
 
 function listSupportedDevices()
 {
@@ -114,21 +115,37 @@ function getKernelInfos()
 
 function usage()
 {
-	echo "usage: $1 <skriptname> <device> [stap arguments (forwardded to the stap compiler)]]"
+	echo "usage: build-module <skriptname> <device> [stap arguments (forwardded to the stap compiler)]]"
 	listSupportedDevices
 	exit 1
 }
 
 if [ $# -lt 2 ];
 then
-	usage $0
+       usage $0
 fi
 
-getKernelInfos $2
+while getopts "f:s:d:" arg #选项后面的冒号表示该选项需要参数
+do
+    case $arg in
+        s)
+            SCRIPT=$OPTARG
+            ;;
+        d)
+            getKernelInfos $OPTARG
+            ;;
+        f)
+            PROBE_FUNC=$OPTARG
+            ;;
+        ?)  #当有不认识的选项的时候arg为?
+        echo "unkonw argument"
+        exit 1
+        ;;
+    esac
+done
 
 checkCompiler
 
-SCRIPT=$1
 if [ ! -f ${SCRIPT_DIR}/${SCRIPT}".stp" ];
 then
 	echo "The specifid script (${SCRIPT}.stp) does not exist" >&2
@@ -154,7 +171,7 @@ else
 	CROSS_COMPILE="-B CROSS_COMPILE=${COMPILER_PREFIX}"
 fi
 
-STAP_CMD="${STAP} -p 4 -v ${3} -a ${KERNEL_ARCH} ${CROSS_COMPILE} -r ${KERNEL_SRC} -R ${STAP_RUNTIME} -t -k -g -m ${MODULE_NAME} ${SCRIPT_DIR}/${SCRIPT}.stp"
+STAP_CMD="${STAP} -p 4 -v -a ${KERNEL_ARCH} ${CROSS_COMPILE} -r ${KERNEL_SRC} -R ${STAP_RUNTIME} -t -k -g -m ${MODULE_NAME} ${SCRIPT_DIR}/${SCRIPT}.stp ${PROBE_FUNC}"
 echo "Executing: ${STAP_CMD}"
 ${STAP_CMD}
 

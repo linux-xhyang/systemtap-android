@@ -1,0 +1,66 @@
+#! /usr/bin/env stap
+
+%{
+    #include <linux/fs.h>		/* For VERIFY_READ/VERIFY_WRITE */
+            %}
+
+global inode
+probe begin {
+    targetpid = target();
+}
+
+@__private30 function __address2inode:long (mapping:long)
+{
+    if(mapping == 0)
+        return -1;
+    return @cast(mapping, "address_space", "kernel")->host;
+}
+
+function __ino_inode:long(inode:long)
+{
+    if(inode == 0)
+        return -1;
+    return @cast(inode, "inode", "kernel")->i_ino;
+}
+
+function dump_stack() %{
+    /* guru */ /* unmodified-fnargs */
+    dump_stack();
+    %}
+
+probe kernel.function("delete_from_page_cache") {
+    __page = $page;
+    ino = __page_ino(__page);
+    if(ino == 5321){
+        dump_stack();
+    }
+}
+
+probe kernel.function("fuse_readpages") {
+    __mapping = $mapping;
+    __host = __address2inode(__mapping);
+    ino = __ino_inode(__host);
+    inode[ino] = (@cast(__mapping,"address_space","kernel")->nrpages);
+}
+# probe kernel.function("add_to_page_cache_locked") {
+#     __mapping = $mapping;
+#     __host = __address2inode(__mapping);
+
+#     ino = __ino_inode(__host);
+
+#     if(ino == 5321){
+#         dump_stack();
+#     }
+# }
+
+probe kernel.function("fuse_file_fallocate") {
+    dump_stack();
+}
+
+probe end{
+}
+
+probe timer.s(1) {
+    foreach([i] in inode)
+    printf("inode[%d]=%d\n",i,inode[i])
+}
